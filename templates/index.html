@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebShare - 文件共享</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .upload-form {
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px dashed #ccc;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .file-list {
+            margin-top: 20px;
+        }
+        .file-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .file-item:hover {
+            background-color: #f8f8f8;
+        }
+        .file-item a {
+            color: #2196F3;
+            text-decoration: none;
+        }
+        .file-item a:hover {
+            text-decoration: underline;
+        }
+        .status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+        }
+        .success {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .error {
+            background-color: #f44336;
+            color: white;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+            display: none;
+        }
+        .progress {
+            width: 0%;
+            height: 100%;
+            background-color: #4CAF50;
+            transition: width 0.3s ease;
+        }
+        .file-info {
+            color: #666;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WebShare 文件共享</h1>
+        
+        <div class="upload-form">
+            <form action="/upload" method="post" enctype="multipart/form-data" id="uploadForm">
+                <input type="file" name="file" id="fileInput">
+                <input type="submit" value="上传文件">
+            </form>
+            <div class="progress-bar" id="progressBar">
+                <div class="progress" id="progress"></div>
+            </div>
+        </div>
+
+        <div class="file-list">
+            <h2>文件列表</h2>
+            {% for file in files %}
+            <div class="file-item">
+                <div>
+                    <div>{{ file.name }}</div>
+                    <div class="file-info">{{ file.size }}</div>
+                </div>
+                <a href="/download/{{ file.name }}">下载</a>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <script>
+        const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks
+
+        document.getElementById('uploadForm').onsubmit = function(e) {
+            e.preventDefault();
+            const file = document.getElementById('fileInput').files[0];
+            if (!file) {
+                showStatus('请选择文件', 'error');
+                return;
+            }
+
+            const progressBar = document.getElementById('progressBar');
+            const progress = document.getElementById('progress');
+            progressBar.style.display = 'block';
+
+            if (file.size <= CHUNK_SIZE) {
+                // 小文件直接上传
+                uploadFile(file, progress);
+            } else {
+                // 大文件分片上传
+                uploadLargeFile(file, progress);
+            }
+        };
+
+        function uploadFile(file, progress) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const xhr = new XMLHttpRequest();
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    const percentComplete = (e.loaded / e.total) * 100;
+                    progress.style.width = percentComplete + '%';
+                }
+            };
+
+            xhr.onload = function() {
+                const response = JSON.parse(xhr.response);
+                showStatus(response.message, response.success ? 'success' : 'error');
+                if (response.success) {
+                    setTimeout(() => location.reload(), 1000);
+                }
+            };
+
+            xhr.onerror = function() {
+                showStatus('上传失败', 'error');
+            };
+
+            xhr.open('POST', '/upload');
+            xhr.send(formData);
+        }
+
+        async function uploadLargeFile(file, progress) {
+            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+            let uploadedChunks = 0;
+
+            for (let i = 0; i < totalChunks; i++) {
+                const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+                const formData = new FormData();
+                formData.append('chunk', chunk);
+                formData.append('filename', file.name);
+                formData.append('chunkNumber', i);
+                formData.append('totalChunks', totalChunks);
+
+                try {
+                    const response = await fetch('/upload-chunk', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const result = await response.json();
+                    
+                    uploadedChunks++;
+                    const percentComplete = (uploadedChunks / totalChunks) * 100;
+                    progress.style.width = percentComplete + '%';
+
+                    if (uploadedChunks === totalChunks) {
+                        showStatus('文件上传成功', 'success');
+                        setTimeout(() => location.reload(), 1000);
+                    }
+                } catch (error) {
+                    showStatus('上传失败: ' + error, 'error');
+                    break;
+                }
+            }
+        }
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = 'status ' + type;
+            status.style.display = 'block';
+            
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
